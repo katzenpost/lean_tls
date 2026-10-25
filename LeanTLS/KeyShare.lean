@@ -247,4 +247,16 @@ def mlkem768 : KeyShare :=
 X25519's; the secret is `mlkem_ss ‖ x25519_ss`. -/
 def x25519mlkem768 : KeyShare := KeyShare.concat "X25519MLKEM768" 0x11ec mlkem768 x25519
 
+/-- The groups by name, for configurations that must stay in `Type`. -/
+inductive Group where
+  | x25519mlkem768
+  | x25519
+  | mlkem768
+deriving DecidableEq, Repr, Inhabited
+
+def Group.keyShare : Group → KeyShare
+  | .x25519mlkem768 => LeanTLS.x25519mlkem768
+  | .x25519 => LeanTLS.x25519
+  | .mlkem768 => LeanTLS.mlkem768
+
 end LeanTLS

@@ -22,8 +22,8 @@ Finished. The server authenticates with one Ed25519 certificate and asks for non
 `Established` has a private constructor: this module builds one only once the client's Finished
 has checked. -/
 
-structure Config where
-  share  : KeyShare := x25519mlkem768
+structure Config : Type where
+  group  : Group := .x25519mlkem768
   suites : List Suite := cipherSuites
   alpn   : ByteArray
   transportParams : ByteArray
@@ -31,6 +31,8 @@ structure Config where
   signingKey : Vector UInt8 32
   /-- DER, holding `signingKey`'s public key. -/
   certificate : ByteArray
+
+abbrev Config.share (cfg : Config) : KeyShare := cfg.group.keyShare
 
 structure Established : Type where
   private mk ::

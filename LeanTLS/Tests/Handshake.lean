@@ -163,7 +163,7 @@ def main : IO UInt32 := do
     let (_, o0) ← Client.start wrongAlpn seedA
     discard <| toServer Server.init (sends o0)
   ok r "wrong ALPN: no_application_protocol" (alertOf r2 == some .noApplicationProtocol)
-  let x25519Only : Client.Config := { clientCfg with share := x25519 }
+  let x25519Only : Client.Config := { clientCfg with group := .x25519 }
   let r3 : Except Alert Unit := do
     let (_, o0) ← Client.start x25519Only seedA
     discard <| toServer Server.init (sends o0)

@@ -24,8 +24,8 @@ that the server is authenticated; its constructor is private to this module, whi
 after the pin and the signature have checked, and moves to `connected` only after the server's
 Finished has too. -/
 
-structure Config where
-  share  : KeyShare := x25519mlkem768
+structure Config : Type where
+  group  : Group := .x25519mlkem768
   suites : List Suite := cipherSuites
   alpn   : ByteArray
   /-- The QUIC transport parameters, already encoded. -/
@@ -33,6 +33,8 @@ structure Config where
   /-- `SHA-256(SubjectPublicKeyInfo)` of each acceptable server key. -/
   pins : List ByteArray
   serverName : Option String := none
+
+abbrev Config.share (cfg : Config) : KeyShare := cfg.group.keyShare
 
 structure Established (cfg : Config) : Type where
   private mk ::
