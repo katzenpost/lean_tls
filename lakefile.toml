@@ -13,7 +13,7 @@ relaxedAutoImplicit = false
 [[require]]
 name = "cryptlib"
 git = "https://github.com/katzenpost/cryptlib.git"
-rev = "741bd4cdf61a9f643eea97c82a3bb974be369295"
+rev = "52b9fb4eaac158721a5c265cd5f5e8c3088d1646"
 
 [[lean_lib]]
 name = "LeanTLS"
