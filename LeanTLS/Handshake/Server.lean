@@ -42,7 +42,7 @@ structure Established : Type where
   clientFinished : ByteArray
   /-- The verify data the transcript and the client's handshake secret call for. -/
   expectedFinished : ByteArray
-  finishedValid : ctEq clientFinished expectedFinished = true
+  finishedValid : clientFinished = expectedFinished
 
 structure Pending where
   suite : Suite
@@ -119,7 +119,8 @@ private def onFinished (cfg : Config) (p : Pending) (m : RawMessage) :
     Except Alert (Phase × Array Output) := do
   let expected := finishedData p.clientHandshake p.transcript
   if h : ctEq m.body expected = true then
-    pure (.connected ⟨p.suite, cfg.alpn, p.peerTransportParams, m.body, expected, h⟩, #[])
+    pure (.connected ⟨p.suite, cfg.alpn, p.peerTransportParams, m.body, expected,
+      (Cryptlib.Util.ConstantTime.ctEq_iff _ _).mp h⟩, #[])
   else throw .decryptError
 
 /-- CRYPTO stream bytes received at `level`, in order. `seed` is the connection's entropy. -/

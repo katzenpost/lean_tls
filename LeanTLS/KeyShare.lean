@@ -134,10 +134,10 @@ def kemFinish (sk : kem.PrivateKey) (share : Vector UInt8 kem.ciphertextSize) :
   | none => none
 
 /-- Key generation succeeds and the server's draw decapsulates correctly. -/
-def kemReliable (ec es : Vector UInt8 32) : Prop :=
+def KemReliable (ec es : Vector UInt8 32) : Prop :=
   (∃ r t, kem.generate (kem.stateFromSeed ec) = .ok r t) ∧ kem.Reliable (kem.stateFromSeed es)
 
-theorem kemAgree (ec es : Vector UInt8 32) (hr : kemReliable kem ec es) (s k) :
+theorem kemAgree (ec es : Vector UInt8 32) (hr : KemReliable kem ec es) (s k) :
     kemRespond kem check es (kemGen kem ec).2 = some (s, k) →
       kemFinish kem (kemGen kem ec).1 s = some k := by
   obtain ⟨⟨⟨pk, sk, hkp⟩, t, hgen⟩, hrel⟩ := hr
@@ -166,7 +166,7 @@ def ofKEM (name : String) (group : Nat) (kem : KEM) (check : kem.PublicKey → B
   clientGen := kemGen kem
   serverRespond := kemRespond kem check
   clientFinish := kemFinish kem
-  Reliable := kemReliable kem
+  Reliable := KemReliable kem
   agree := kemAgree kem check
 
 /-! ## Concatenation: two groups side by side
