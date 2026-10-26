@@ -31,6 +31,8 @@ carries the laws of its parts.
   server derived from its share. `KeyShare.ofNIKE` takes `agree` from a NIKE's commutativity,
   `KeyShare.ofKEM` from a KEM's round trip, and `KeyShare.concat` assembles it from two groups'.
   `x25519mlkem768` is `concat mlkem768 x25519` and needs no proof of its own.
+* `Agreement.keys_agree`: when the key exchange is `Reliable` and the server accepts the client's
+  share, the client derives exactly the server's handshake and application traffic secrets.
 * `CipherSuite` carries a Cryptlib `AEAD` and with it that AEAD's laws.
 * `WireLaws`, `MessageLaws`: parsers read back what writers write. `RT w p x n` says the writer
   `w` writes at most `n` bytes from which `p` reads `x`; it composes like the do-blocks it
