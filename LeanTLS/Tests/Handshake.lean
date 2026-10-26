@@ -128,6 +128,23 @@ def main : IO UInt32 := do
       | some e => ok r s!"{name}: server has the client's transport parameters" (e.peerTransportParams == ⟨#[4, 5]⟩)
       | none => pure ()
 
+  IO.println "the correctness theorem's hypotheses, for this client and server"
+  let share := clientCfg.share
+  let ec := drawVec seedA "key share" share.entropySize
+  let es := drawVec seedB "key share" share.entropySize
+  ok r "same group and ALPN" (clientCfg.group == serverCfg.group && clientCfg.alpn == serverCfg.alpn)
+  ok r "a common cipher suite" (serverCfg.suites.any (clientCfg.suites.contains ·))
+  ok r "the client's sizes" (0 < clientCfg.alpn.size && clientCfg.alpn.size < 256 &&
+    clientCfg.transportParams.size ≤ 16384 && clientCfg.serverName.isNone && clientCfg.suites.length ≤ 64)
+  ok r "the server's sizes" (0 < serverCfg.alpn.size && serverCfg.alpn.size < 256 &&
+    serverCfg.transportParams.size ≤ 16384 && serverCfg.certificate.size ≤ 30000)
+  ok r "the server accepts the client's share" (share.serverRespond es (share.clientGen ec).2).isSome
+  ok r "the server random is not a HelloRetryRequest's" (draw seedB "server random" 32 != Messages.helloRetryRandom)
+  ok r "the certificate holds the signing key and is pinned" (match X509.parseLeaf serverCfg.certificate with
+    | .ok leaf => leaf.ed25519Key == some (ofVector (ed25519.pub serverCfg.signingKey)) &&
+        clientCfg.pins.contains (KeySchedule.hash leaf.spki)
+    | .error _ => false)
+
   IO.println "refusals"
   let flight1 : Except Alert (Client.State clientCfg × Array (Level × ByteArray)) := do
     let (c0, o0) ← Client.start clientCfg seedA

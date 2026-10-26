@@ -33,6 +33,12 @@ carries the laws of its parts.
   `x25519mlkem768` is `concat mlkem768 x25519` and needs no proof of its own.
 * `Agreement.keys_agree`: when the key exchange is `Reliable` and the server accepts the client's
   share, the client derives exactly the server's handshake and application traffic secrets.
+* `Handshake.handshake_correct`: an honest client and server, run against each other on each
+  other's output, both end established with each other's transport parameters, and every level's
+  keys match: what the client reads the server writes, and the other way round. Honest means
+  compatible configurations (group, a common cipher suite, ALPN, sizes), a `Reliable` key exchange
+  the server accepts, a server random that is not a HelloRetryRequest's, and a certificate that
+  holds the server's signing key and is pinned by the client.
 * `CipherSuite` carries a Cryptlib `AEAD` and with it that AEAD's laws.
 * `WireLaws`, `MessageLaws`: parsers read back what writers write. `RT w p x n` says the writer
   `w` writes at most `n` bytes from which `p` reads `x`; it composes like the do-blocks it
