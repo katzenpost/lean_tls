@@ -50,23 +50,30 @@ structure Extension where
   typ  : Nat
   data : ByteArray
 
+def extension : Parser Extension := do
+  let typ ← Parser.u16
+  let data ← Parser.opaque16
+  pure { typ, data }
+
+def writeExtension (e : Extension) : Writer Unit := do
+  Writer.u16 e.typ
+  Writer.opaque16 e.data
+
+/-- Whether two extensions in a list have the same type. -/
+def dupTypes : List Extension → Bool
+  | [] => false
+  | e :: es => es.any (·.typ == e.typ) || dupTypes es
+
 /-- Extensions, at most one of each type. -/
 def extensions : Parser (Array Extension) := do
-  let exts ← Parser.vec16 (Parser.many do
-    let typ ← Parser.u16
-    let data ← Parser.opaque16
-    pure { typ, data : Extension })
-  let mut seen : Array Nat := #[]
-  for e in exts do
-    if seen.contains e.typ then throw .illegalParameter
-    seen := seen.push e.typ
+  let exts ← Parser.vec16 (Parser.many extension)
+  if dupTypes exts.toList then throw .illegalParameter
   pure exts
 
 def writeExtensions (exts : Array Extension) : Writer Unit :=
   Writer.prefixed 2 do
     for e in exts do
-      Writer.u16 e.typ
-      Writer.opaque16 e.data
+      writeExtension e
 
 def find (exts : Array Extension) (typ : Nat) : Option ByteArray :=
   (exts.find? (·.typ == typ)).map (·.data)
@@ -198,18 +205,19 @@ structure RawMessage where
   raw  : ByteArray
 
 /-- Split complete messages off the front of `buf`; the rest is an incomplete message. -/
-def splitMessages (buf : ByteArray) : Except Alert (Array RawMessage × ByteArray) := do
-  let mut pos := 0
-  let mut out := #[]
-  for _ in [0:buf.size] do
-    if pos + 4 > buf.size then break
-    let len := (buf.get! (pos + 1)).toNat * 65536 + (buf.get! (pos + 2)).toNat * 256 +
-      (buf.get! (pos + 3)).toNat
-    if len > maxMessageSize then throw .decodeError
-    if pos + 4 + len > buf.size then break
-    out := out.push { typ := buf.get! pos, body := buf.extract (pos + 4) (pos + 4 + len),
-                      raw := buf.extract pos (pos + 4 + len) }
-    pos := pos + 4 + len
-  pure (out, buf.extract pos buf.size)
+def splitMessages (buf : ByteArray) : Except Alert (Array RawMessage × ByteArray) :=
+  go buf.size 0 #[]
+where
+  /-- Messages from `pos` on, at most `fuel` of them. -/
+  go : Nat → Nat → Array RawMessage → Except Alert (Array RawMessage × ByteArray)
+    | 0, pos, out => pure (out, buf.extract pos buf.size)
+    | fuel + 1, pos, out =>
+      if pos + 4 > buf.size then pure (out, buf.extract pos buf.size) else
+      let len := (buf.get! (pos + 1)).toNat * 65536 + (buf.get! (pos + 2)).toNat * 256 +
+        (buf.get! (pos + 3)).toNat
+      if len > maxMessageSize then throw .decodeError
+      else if pos + 4 + len > buf.size then pure (out, buf.extract pos buf.size)
+      else go fuel (pos + 4 + len) (out.push
+        ⟨buf.get! pos, buf.extract (pos + 4) (pos + 4 + len), buf.extract pos (pos + 4 + len)⟩)
 
 end LeanTLS.Messages

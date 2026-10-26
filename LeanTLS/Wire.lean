@@ -48,7 +48,7 @@ def u8 : Parser UInt8 := do
 
 def uN (n : Nat) : Parser Nat := do
   let b ← bytes n
-  pure (b.foldl (fun acc x => acc * 256 + x.toNat) 0)
+  pure (b.data.foldl (fun acc x => acc * 256 + x.toNat) 0)
 
 def u16 : Parser Nat := uN 2
 def u24 : Parser Nat := uN 3
@@ -76,15 +76,18 @@ def opaque16 : Parser ByteArray := vec16 (do bytes (← remaining))
 def opaque24 : Parser ByteArray := vec24 (do bytes (← remaining))
 
 /-- Items until the limit. Each must consume input, so at most `remaining` iterations. -/
-def many {α : Type} (p : Parser α) : Parser (Array α) := do
-  let mut out := #[]
-  for _ in [0:(← remaining)] do
-    if ← atEnd then break
-    let before := (← get).pos
-    out := out.push (← p)
-    if (← get).pos == before then fail
-  unless ← atEnd do fail
-  pure out
+def many {α : Type} (p : Parser α) : Parser (Array α) := do go p (← remaining) #[]
+where
+  go (p : Parser α) : Nat → Array α → Parser (Array α)
+    | 0, out => do
+      unless ← atEnd do fail
+      pure out
+    | n + 1, out => do
+      if ← atEnd then return out
+      let before := (← get).pos
+      let a ← p
+      if (← get).pos == before then fail
+      go p n (out.push a)
 
 def run {α : Type} (p : Parser α) (b : ByteArray) : Except Alert α := do
   let (a, c) ← (p b).run ⟨0, b.size⟩
