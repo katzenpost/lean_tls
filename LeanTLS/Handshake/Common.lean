@@ -9,6 +9,7 @@ import LeanTLS.KeySchedule
 import LeanTLS.KeyShare
 import LeanTLS.Messages
 import Cryptlib.Primitives.Sign.Ed25519_verify
+import Cryptlib.Util.ConstantTime
 
 namespace LeanTLS.Handshake
 
@@ -50,10 +51,9 @@ instance : LawfulBEq ByteArray where
   eq_of_beq {a b} h := ByteArray.ext (eq_of_beq (show (a.data == b.data) = true from h))
   rfl {a} := (beq_self_eq_true a.data : (a.data == a.data) = true)
 
-/-- Byte equality that inspects every byte, whatever the first difference. -/
-def ctEq (a b : ByteArray) : Bool :=
-  a.size == b.size &&
-    (Array.range a.size).foldl (fun acc i => acc ||| (a.get! i ^^^ b.get! i)) 0 == 0
+/-- Byte equality that inspects every byte, whatever the first difference: Cryptlib's, with
+`ctEq_iff` to say it is equality. -/
+abbrev ctEq := Cryptlib.Util.ConstantTime.ctEq
 
 /-- The input an Ed25519 CertificateVerify signs (RFC 8446 §4.4.3). -/
 def certVerifyInput (server : Bool) (transcript : ByteArray) : ByteArray :=
