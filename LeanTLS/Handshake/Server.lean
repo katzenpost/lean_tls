@@ -66,7 +66,7 @@ def State.established? (s : State) : Option Established :=
 
 def init : State := {}
 
-private def onClientHello (cfg : Config) (seed : Vector UInt8 32) (m : RawMessage) :
+def onClientHello (cfg : Config) (seed : Vector UInt8 32) (m : RawMessage) :
     Except Alert (Phase × Array Output) := do
   let ch ← Parser.run clientHello m.body
   -- RFC 9001 §8.4: QUIC has no middlebox compatibility mode.
@@ -115,7 +115,7 @@ private def onClientHello (cfg : Config) (seed : Vector UInt8 32) (m : RawMessag
       .send .handshake (ee ++ cert ++ cv ++ fin),
       .install .application suite { read := ap.client, write := ap.server }])
 
-private def onFinished (cfg : Config) (p : Pending) (m : RawMessage) :
+def onFinished (cfg : Config) (p : Pending) (m : RawMessage) :
     Except Alert (Phase × Array Output) := do
   let expected := finishedData p.clientHandshake p.transcript
   if h : ctEq m.body expected = true then

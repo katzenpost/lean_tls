@@ -97,7 +97,7 @@ def start (cfg : Config) (seed : Vector UInt8 32) : Except Alert (State cfg × A
   let ch ← clientHello cfg (draw seed "client random" 32) (ofVector share)
   pure ({ phase := .waitServerHello secret ch }, #[.send .initial ch])
 
-private def onServerHello (cfg : Config) (secret : cfg.share.ClientSecret) (transcript : ByteArray)
+def onServerHello (cfg : Config) (secret : cfg.share.ClientSecret) (transcript : ByteArray)
     (m : RawMessage) : Except Alert (Phase cfg × Array Output) := do
   let sh ← Parser.run serverHello m.body
   if sh.random == helloRetryRandom then throw .handshakeFailure
@@ -114,7 +114,7 @@ private def onServerHello (cfg : Config) (secret : cfg.share.ClientSecret) (tran
   pure (.waitEncryptedExtensions { suite, hs, secrets := ts, transcript },
     #[.install .handshake suite { read := ts.server, write := ts.client }])
 
-private def onEncryptedExtensions (cfg : Config) (ctx : HsCtx) (m : RawMessage) :
+def onEncryptedExtensions (cfg : Config) (ctx : HsCtx) (m : RawMessage) :
     Except Alert (Phase cfg × Array Output) := do
   let exts ← Parser.run extensions m.body
   let protos ← decodeExt alpnList (← require (find exts ExtType.alpn) .noApplicationProtocol)
@@ -122,7 +122,7 @@ private def onEncryptedExtensions (cfg : Config) (ctx : HsCtx) (m : RawMessage) 
   let tps ← require (find exts ExtType.quicTransportParameters) .missingExtension
   pure (.waitCertificate { ctx with transcript := ctx.transcript ++ m.raw } cfg.alpn tps, #[])
 
-private def onCertificate (cfg : Config) (ctx : HsCtx) (alpn tps : ByteArray) (m : RawMessage) :
+def onCertificate (cfg : Config) (ctx : HsCtx) (alpn tps : ByteArray) (m : RawMessage) :
     Except Alert (Phase cfg × Array Output) := do
   let c ← Parser.run certificate m.body
   if c.context.size != 0 then throw .illegalParameter
@@ -134,7 +134,7 @@ private def onCertificate (cfg : Config) (ctx : HsCtx) (alpn tps : ByteArray) (m
     pure (.waitCertificateVerify ctx alpn tps leaf.spki h (toVecN 32 key), #[])
   else throw .badCertificate
 
-private def onCertificateVerify (cfg : Config) (ctx : HsCtx) (alpn tps spki : ByteArray)
+def onCertificateVerify (cfg : Config) (ctx : HsCtx) (alpn tps spki : ByteArray)
     (pinned : KeySchedule.hash spki ∈ cfg.pins) (key : Vector UInt8 32) (m : RawMessage) :
     Except Alert (Phase cfg × Array Output) := do
   let cv ← Parser.run certificateVerify m.body
@@ -147,7 +147,7 @@ private def onCertificateVerify (cfg : Config) (ctx : HsCtx) (alpn tps spki : By
     pure (.waitFinished { ctx with transcript := ctx.transcript ++ m.raw } est, #[])
   else throw .decryptError
 
-private def onFinished (cfg : Config) (ctx : HsCtx) (est : Established cfg) (m : RawMessage) :
+def onFinished (cfg : Config) (ctx : HsCtx) (est : Established cfg) (m : RawMessage) :
     Except Alert (Phase cfg × Array Output) := do
   unless ctEq m.body (finishedData ctx.secrets.server ctx.transcript) do throw .decryptError
   let transcript := ctx.transcript ++ m.raw
@@ -156,7 +156,7 @@ private def onFinished (cfg : Config) (ctx : HsCtx) (est : Established cfg) (m :
   pure (.connected est,
     #[.send .handshake fin, .install .application ctx.suite { read := ap.server, write := ap.client }])
 
-private def handle (cfg : Config) (p : Phase cfg) (level : Level) (m : RawMessage) :
+def handle (cfg : Config) (p : Phase cfg) (level : Level) (m : RawMessage) :
     Except Alert (Phase cfg × Array Output) :=
   match p, level with
   | .waitServerHello secret tr, .initial =>

@@ -11,3 +11,4 @@ import LeanTLS.X509
 import LeanTLS.Handshake.Common
 import LeanTLS.Handshake.Client
 import LeanTLS.Handshake.Server
+import LeanTLS.Handshake.Correct
