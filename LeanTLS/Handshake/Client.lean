@@ -16,7 +16,7 @@ open Cryptlib.Util.Bytes (toVecN ofVector)
 /-! # The client handshake
 
 A 1-RTT TLS 1.3 handshake for QUIC that authenticates the server by a pinned
-`SHA-256(SubjectPublicKeyInfo)` and an Ed25519 CertificateVerify. One key share is offered and
+`SHA-256(SubjectPublicKeyInfo)` and an Ed25519 or ML-DSA-65 CertificateVerify. One key share is offered and
 HelloRetryRequest is refused. The client sends no certificate.
 
 The phases carry only what has been established so far. `Established` is the client's evidence
@@ -32,6 +32,8 @@ structure Config : Type where
   transportParams : ByteArray
   /-- `SHA-256(SubjectPublicKeyInfo)` of each acceptable server key. -/
   pins : List ByteArray
+  /-- How the server may authenticate; ML-DSA-65 alone for post-quantum authentication. -/
+  schemes : List Scheme := [.ed25519, .mldsa65]
   serverName : Option String := none
 
 abbrev Config.share (cfg : Config) : KeyShare := cfg.group.keyShare
@@ -43,10 +45,10 @@ structure Established (cfg : Config) : Type where
   peerTransportParams : ByteArray
   spki : ByteArray
   pinned : KeySchedule.hash spki ∈ cfg.pins
-  serverKey : Vector UInt8 32
+  serverKey : AuthKey
   signedInput : ByteArray
-  signature : Vector UInt8 64
-  signatureValid : ed25519.verify serverKey signedInput signature = true
+  signature : ByteArray
+  signatureValid : serverKey.verify signedInput signature = true
 
 /-- Handshake keys and the transcript so far. -/
 structure HsCtx where
@@ -60,7 +62,7 @@ inductive Phase (cfg : Config) : Type where
   | waitEncryptedExtensions (ctx : HsCtx)
   | waitCertificate (ctx : HsCtx) (alpn tps : ByteArray)
   | waitCertificateVerify (ctx : HsCtx) (alpn tps spki : ByteArray) (pinned : KeySchedule.hash spki ∈ cfg.pins)
-      (key : Vector UInt8 32)
+      (key : AuthKey)
   | waitFinished (ctx : HsCtx) (est : Established cfg)
   | connected (est : Established cfg)
   | failed (alert : Alert)
@@ -82,7 +84,8 @@ def clientHello (cfg : Config) (random share : ByteArray) : Except Alert ByteArr
       Writer.opaque16 name.toUTF8))
   exts := exts.push (← ext ExtType.supportedVersions (Writer.prefixed 1 (Writer.u16 tls13)))
   exts := exts.push (← ext ExtType.supportedGroups (Writer.prefixed 2 (Writer.u16 cfg.share.group)))
-  exts := exts.push (← ext ExtType.signatureAlgorithms (Writer.prefixed 2 (Writer.u16 schemeEd25519)))
+  exts := exts.push (← ext ExtType.signatureAlgorithms (Writer.prefixed 2
+    (for s in cfg.schemes do Writer.u16 s.code)))
   exts := exts.push (← ext ExtType.keyShare (Writer.prefixed 2
     (writeKeyShareEntry { group := cfg.share.group, key := share })))
   exts := exts.push (← ext ExtType.alpn (writeAlpnList #[cfg.alpn]))
@@ -128,22 +131,21 @@ def onCertificate (cfg : Config) (ctx : HsCtx) (alpn tps : ByteArray) (m : RawMe
   if c.context.size != 0 then throw .illegalParameter
   let entry ← require c.entries[0]? .badCertificate
   let leaf ← X509.parseLeaf entry.data
-  let key ← require leaf.ed25519Key .badCertificate
+  let key ← require leaf.key .badCertificate
+  unless cfg.schemes.contains key.scheme do throw .badCertificate
   let ctx := { ctx with transcript := ctx.transcript ++ m.raw }
   if h : KeySchedule.hash leaf.spki ∈ cfg.pins then
-    pure (.waitCertificateVerify ctx alpn tps leaf.spki h (toVecN 32 key), #[])
+    pure (.waitCertificateVerify ctx alpn tps leaf.spki h key, #[])
   else throw .badCertificate
 
 def onCertificateVerify (cfg : Config) (ctx : HsCtx) (alpn tps spki : ByteArray)
-    (pinned : KeySchedule.hash spki ∈ cfg.pins) (key : Vector UInt8 32) (m : RawMessage) :
+    (pinned : KeySchedule.hash spki ∈ cfg.pins) (key : AuthKey) (m : RawMessage) :
     Except Alert (Phase cfg × Array Output) := do
   let cv ← Parser.run certificateVerify m.body
-  if cv.scheme != schemeEd25519 then throw .illegalParameter
-  if cv.signature.size != 64 then throw .decodeError
+  if cv.scheme != key.scheme.code then throw .illegalParameter
   let input := certVerifyInput true ctx.transcript
-  let sig := toVecN 64 cv.signature
-  if hv : ed25519.verify key input sig = true then
-    let est : Established cfg := ⟨ctx.suite, alpn, tps, spki, pinned, key, input, sig, hv⟩
+  if hv : key.verify input cv.signature = true then
+    let est : Established cfg := ⟨ctx.suite, alpn, tps, spki, pinned, key, input, cv.signature, hv⟩
     pure (.waitFinished { ctx with transcript := ctx.transcript ++ m.raw } est, #[])
   else throw .decryptError
 

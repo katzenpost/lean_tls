@@ -20,7 +20,7 @@ def identity : Vector UInt8 32 := Vector.ofFn fun i => UInt8.ofNat i.val
 def serverKey : ByteArray := ofVector (ed25519.pub identity)
 
 def serverCert : ByteArray :=
-  X509.selfSigned (fun m => ofVector (ed25519.sign identity m ()).1) serverKey
+  X509.selfSigned (fun m => ofVector (Cryptlib.Primitives.Sign.Ed25519Math.signNative identity m)) serverKey
     ⟨Array.replicate 16 7⟩ 1761433200 1761436800
 
 def serverPin : ByteArray :=
@@ -35,6 +35,11 @@ def serverCfg : Server.Config :=
 
 def clientCfg : Client.Config := { alpn := h3, transportParams := ⟨#[4, 5]⟩, pins := [serverPin] }
 
+/-- The Ed25519 key a certificate holds, if that is its kind. -/
+def edKey : Option AuthKey → Option ByteArray
+  | some (.ed25519 k) => some (ofVector k)
+  | _ => none
+
 def sends (out : Array Output) : Array (Level × ByteArray) :=
   out.filterMap fun | .send l d => some (l, d) | _ => none
 
@@ -42,12 +47,12 @@ def installs (out : Array Output) : Array (Level × Suite × Secrets) :=
   out.filterMap fun | .install l s k => some (l, s, k) | _ => none
 
 /-- Deliver each send to the other side, in order. -/
-def toServer (s : Server.State) (msgs : Array (Level × ByteArray)) :
+def toServer (s : Server.State) (msgs : Array (Level × ByteArray)) (cfg : Server.Config := serverCfg) :
     Except Alert (Server.State × Array Output) := do
   let mut st := s
   let mut out := #[]
   for (l, d) in msgs do
-    let (st', o) ← Server.recv serverCfg seedB st l d
+    let (st', o) ← Server.recv cfg seedB st l d
     st := st'
     out := out ++ o
   pure (st, out)
@@ -86,7 +91,7 @@ def main : IO UInt32 := do
   match X509.parseLeaf goCert with
   | .ok leaf =>
     ok r "Go epochCertificate: pin" (KeySchedule.hash leaf.spki == goPin)
-    ok r "Go epochCertificate: Ed25519 key" (leaf.ed25519Key == some goKey)
+    ok r "Go epochCertificate: Ed25519 key" (edKey leaf.key == some goKey)
   | .error _ => ok r "Go epochCertificate parses" false
   ok r "our key from the same seed is Go's" (serverKey == goKey)
   ok r "our certificate has Go's pin" (serverPin == goPin)
@@ -141,9 +146,54 @@ def main : IO UInt32 := do
   ok r "the server accepts the client's share" (share.serverRespond es (share.clientGen ec).2).isSome
   ok r "the server random is not a HelloRetryRequest's" (draw seedB "server random" 32 != Messages.helloRetryRandom)
   ok r "the certificate holds the signing key and is pinned" (match X509.parseLeaf serverCfg.certificate with
-    | .ok leaf => leaf.ed25519Key == some (ofVector (ed25519.pub serverCfg.signingKey)) &&
+    | .ok leaf => edKey leaf.key == some (ofVector (ed25519.pub serverCfg.signingKey)) &&
         clientCfg.pins.contains (KeySchedule.hash leaf.spki)
     | .error _ => false)
+
+  IO.println "ML-DSA-65 authentication"
+  match X509.certificateFor .mldsa65 (ofVector identity) (ofVector seedB) ⟨Array.replicate 16 7⟩
+      1761433200 1761436800 with
+  | .error a => ok r s!"ML-DSA-65 certificate ({repr a})" false
+  | .ok pqCert =>
+    let pqPin := match X509.parseLeaf pqCert with
+      | .ok leaf => KeySchedule.hash leaf.spki
+      | .error _ => ByteArray.empty
+    let pqServer : Server.Config := { serverCfg with scheme := .mldsa65, certificate := pqCert }
+    let pqClient : Client.Config := { clientCfg with pins := [pqPin], schemes := [.mldsa65] }
+    ok r s!"ML-DSA-65 certificate parses ({pqCert.size} bytes)" (pqPin.size == 32)
+    let pq : Except Alert (Client.State pqClient × Server.State × Array Output × Array Output) := do
+      let (c0, o0) ← Client.start pqClient seedA
+      let (s1, o1) ← toServer Server.init (sends o0) pqServer
+      let (c1, o2) ← toClient c0 (sends o1)
+      let (s2, _) ← toServer s1 (sends o2) pqServer
+      pure (c1, s2, o1, o2)
+    match pq with
+    | .error a => ok r s!"ML-DSA-65 handshake completes ({repr a})" false
+    | .ok (c, s, o1, o2) =>
+      let srv := installs o1
+      let cli := installs o2
+      let agree (a b : Level × Suite × Secrets) :=
+        a.1 == b.1 && a.2.1 == b.2.1 && a.2.2.read == b.2.2.write && a.2.2.write == b.2.2.read
+      ok r "ML-DSA-65: both connected" (c.established?.isSome && s.established?.isSome)
+      ok r "ML-DSA-65: keys agree" (srv.size == 2 && cli.size == 2 && agree srv[0]! cli[0]! && agree srv[1]! cli[1]!)
+      ok r "ML-DSA-65: the client verified an ML-DSA-65 signature"
+        (c.established?.any (·.serverKey.scheme == .mldsa65))
+      let flight := (sends o1).foldl (fun n (_, d) => n + d.size) 0
+      ok r s!"ML-DSA-65: the server's flight is {flight} bytes" (flight > 8000)
+    let tampered : Except Alert Unit := do
+      let (c0, o0) ← Client.start pqClient seedA
+      let (_, o1) ← toServer Server.init (sends o0) pqServer
+      let flipped := (sends o1).map fun (l, d) =>
+        if l == .handshake then (l, d.set! (d.size - 100) (d.get! (d.size - 100) ^^^ 1)) else (l, d)
+      discard <| toClient c0 flipped
+    ok r "ML-DSA-65: a tampered CertificateVerify signature: decrypt_error"
+      (alertOf tampered == some .decryptError)
+  let pqOnly : Client.Config := { clientCfg with schemes := [.mldsa65] }
+  let r5 : Except Alert Unit := do
+    let (_, o0) ← Client.start pqOnly seedA
+    discard <| toServer Server.init (sends o0)
+  ok r "a client accepting only ML-DSA-65 is refused by an Ed25519 server: handshake_failure"
+    (alertOf r5 == some .handshakeFailure)
 
   IO.println "refusals"
   let flight1 : Except Alert (Client.State clientCfg × Array (Level × ByteArray)) := do

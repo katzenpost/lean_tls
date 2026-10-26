@@ -4,13 +4,16 @@ SPDX-License-Identifier: AGPL-3.0-only
 -/
 
 import LeanTLS.Alert
+import LeanTLS.Handshake.Common
 
 namespace LeanTLS.X509
+
+open Cryptlib.Util.Bytes (toVecN)
 
 /-! # The X.509 lean_tls needs
 
 Peers are authenticated by pinning `SHA-256(SubjectPublicKeyInfo)`, as katzenpost's QUIC transport
-does, so a certificate is read only for its SPKI and Ed25519 key. Chains, names, validity and
+does, so a certificate is read only for its SPKI and its Ed25519 or ML-DSA-65 key. Chains, names, validity and
 extensions are not interpreted. Certificates are produced in the shape katzenpost's
 `epochCertificate` produces: self-signed Ed25519, empty names, no extensions.
 
@@ -64,12 +67,16 @@ def tagOID : UInt8 := 0x06
 /-- `id-Ed25519`, 1.3.101.112 (RFC 8410). -/
 def oidEd25519 : ByteArray := ⟨#[0x2b, 0x65, 0x70]⟩
 
+/-- `id-ml-dsa-65`, 2.16.840.1.101.3.4.3.18 (RFC 9881). -/
+def oidMLDSA65 : ByteArray := ⟨#[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x12]⟩
+
 structure Leaf where
   /-- The SubjectPublicKeyInfo as encoded, the input to the pin. -/
   spki : ByteArray
-  ed25519Key : Option ByteArray
+  /-- The key, when it is Ed25519 or ML-DSA-65. -/
+  key : Option Handshake.AuthKey
 
-/-- The SPKI of a certificate, and its key when that key is Ed25519. -/
+/-- The SPKI of a certificate, and its key when that key is Ed25519 or ML-DSA-65. -/
 def parseLeaf (der : ByteArray) : Except Alert Leaf := do
   let (cert, endPos) ← readTLV der 0
   if cert.tag != tagSequence || endPos != der.size then throw .badCertificate
@@ -85,10 +92,15 @@ def parseLeaf (der : ByteArray) : Except Alert Leaf := do
   let (some alg, some key) := (sp[0]?, sp[1]?) | throw .badCertificate
   if alg.tag != tagSequence || key.tag != tagBitString || sp.size != 2 then throw .badCertificate
   let algParts ← children alg.content
-  let isEd := algParts.size == 1 && algParts[0]!.tag == tagOID && algParts[0]!.content == oidEd25519
-  let ed := if isEd && key.content.size == 33 && key.content.get! 0 == 0 then
-      some (key.content.extract 1 33) else none
-  pure { spki := spki.raw, ed25519Key := ed }
+  let oid := if algParts.size == 1 && algParts[0]!.tag == tagOID then algParts[0]!.content
+    else ByteArray.empty
+  let bits := key.content
+  let k : Option Handshake.AuthKey :=
+    if bits.size == 0 || bits.get! 0 != 0 then none
+    else if oid == oidEd25519 && bits.size == 33 then some (.ed25519 (toVecN 32 (bits.extract 1 33)))
+    else if oid == oidMLDSA65 && bits.size == 1953 then some (.mldsa65 (bits.extract 1 1953))
+    else none
+  pure { spki := spki.raw, key := k }
 
 /-! ## Encoding -/
 
@@ -107,6 +119,11 @@ def ed25519AlgId : ByteArray := sequence [tlv tagOID oidEd25519]
 
 def ed25519Spki (key : ByteArray) : ByteArray :=
   sequence [ed25519AlgId, tlv tagBitString (⟨#[0]⟩ ++ key)]
+
+def mldsa65AlgId : ByteArray := sequence [tlv tagOID oidMLDSA65]
+
+def mldsa65Spki (key : ByteArray) : ByteArray :=
+  sequence [mldsa65AlgId, tlv tagBitString (⟨#[0]⟩ ++ key)]
 
 /-- `YYMMDDHHMMSSZ` for a Unix time in 1950–2049 (RFC 5280 §4.1.2.5.1). -/
 def utcTime (unix : Nat) : ByteArray :=
@@ -127,19 +144,40 @@ def utcTime (unix : Nat) : ByteArray :=
     two (secs % 60) ++ "Z"
   tlv 0x17 s.toUTF8
 
-/-- A self-signed Ed25519 certificate in the shape of katzenpost's `epochCertificate`. `serial` is
-16 bytes; its top bit is set and it is encoded positive. -/
-def selfSigned (sign : ByteArray → ByteArray) (key serial : ByteArray)
-    (notBefore notAfter : Nat) : ByteArray :=
+/-- A self-signed certificate in the shape of katzenpost's `epochCertificate`, for the signature
+algorithm `algId` and the key `spki`. `serial` is 16 bytes; its top bit is set and it is encoded
+positive. -/
+def selfSignedWith {ε : Type} (algId spki : ByteArray)
+    (sign : ByteArray → Except ε ByteArray) (serial : ByteArray) (notBefore notAfter : Nat) :
+    Except ε ByteArray := do
   let serialBytes := serial.set! 0 (serial.get! 0 ||| 0x80)
   let tbs := sequence [
     tlv 0xa0 (tlv 0x02 ⟨#[2]⟩),
     tlv 0x02 (⟨#[0]⟩ ++ serialBytes),
-    ed25519AlgId,
+    algId,
     sequence [],
     sequence [utcTime notBefore, utcTime notAfter],
     sequence [],
-    ed25519Spki key]
-  sequence [tbs, ed25519AlgId, tlv tagBitString (⟨#[0]⟩ ++ sign tbs)]
+    spki]
+  pure (sequence [tbs, algId, tlv tagBitString (⟨#[0]⟩ ++ (← sign tbs))])
+
+/-- A self-signed Ed25519 certificate in the shape of katzenpost's `epochCertificate`. -/
+def selfSigned (sign : ByteArray → ByteArray) (key serial : ByteArray)
+    (notBefore notAfter : Nat) : ByteArray :=
+  match selfSignedWith (ε := Empty) ed25519AlgId (ed25519Spki key) (fun tbs => .ok (sign tbs)) serial
+      notBefore notAfter with
+  | .ok c => c
+  | .error e => nomatch e
+
+/-- A self-signed certificate for a server's scheme and private key seed. -/
+def certificateFor (sch : Handshake.Scheme) (sk seed serial : ByteArray) (notBefore notAfter : Nat) :
+    Except Alert ByteArray :=
+  let sk := toVecN 32 sk
+  match sch.authKey sk with
+  | .ed25519 key => pure (selfSigned (fun tbs => Cryptlib.Util.Bytes.ofVector
+      (Cryptlib.Primitives.Sign.Ed25519Math.signNative sk tbs)) (Cryptlib.Util.Bytes.ofVector key)
+      serial notBefore notAfter)
+  | .mldsa65 key => selfSignedWith mldsa65AlgId (mldsa65Spki key)
+      (sch.sign sk (toVecN 32 seed)) serial notBefore notAfter
 
 end LeanTLS.X509

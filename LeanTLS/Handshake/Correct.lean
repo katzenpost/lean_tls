@@ -73,7 +73,9 @@ def u16Bytes (v : Nat) : ByteArray := beBytes 2 v
 
 def svData : ByteArray := beBytes 1 2 ++ u16Bytes Messages.tls13
 def groupsData (g : Nat) : ByteArray := beBytes 2 2 ++ u16Bytes g
-def sigData : ByteArray := beBytes 2 2 ++ u16Bytes schemeEd25519
+/-- The signature schemes a client offers, as a `signature_algorithms` extension. -/
+def sigData (schemes : List Scheme) : ByteArray :=
+  beBytes 2 (2 * schemes.length) ++ Writes.concatMap (schemes.map Scheme.code) u16Bytes
 def ksData (g : Nat) (share : ByteArray) : ByteArray :=
   beBytes 2 (4 + share.size) ++ (u16Bytes g ++ (beBytes 2 share.size ++ share))
 def alpnData (a : ByteArray) : ByteArray := beBytes 2 (1 + a.size) ++ (beBytes 1 a.size ++ a)
@@ -113,6 +115,45 @@ theorem writes_alpn {a : ByteArray} (ha : a.size < 256) :
   have := (Writes.bind hw Writes.pure).prefixed (n := 2) (by simp; omega)
   simpa [alpnData, ByteArray.append_empty, Nat.add_comm] using this
 
+theorem code_lt (s : Scheme) : s.code < 65536 := by cases s <;> decide
+
+theorem concatMap_map {γ : Type} (f : γ → Nat) (out : Nat → ByteArray) :
+    ∀ l : List γ, Writes.concatMap (l.map f) out = Writes.concatMap l (out ∘ f)
+  | [] => rfl
+  | x :: xs => by
+    simp only [List.map_cons, Writes.concatMap_cons, concatMap_map f out xs, Function.comp]
+
+theorem size_concatMap_u16 : ∀ l : List Nat, (Writes.concatMap l u16Bytes).size = 2 * l.length
+  | [] => rfl
+  | x :: xs => by
+    simp only [Writes.concatMap_cons, ByteArray.size_append, u16Bytes, size_beBytes,
+      size_concatMap_u16 xs, List.length_cons]
+    omega
+
+theorem writes_sig (schemes : List Scheme) (h : schemes.length ≤ 100) :
+    Writes (Writer.prefixed 2 (for s in schemes do Writer.u16 s.code)) (sigData schemes) := by
+  have hf := Writes.forIn schemes (fun s _ => do Writer.u16 s.code; Pure.pure (ForInStep.yield PUnit.unit))
+    (fun s => u16Bytes s.code) (fun s _ => Writes.Yields.last (Writes.uN (code_lt s)))
+  have hsz : (Writes.concatMap schemes fun s => u16Bytes s.code).size = 2 * schemes.length := by
+    have := size_concatMap_u16 (schemes.map Scheme.code)
+    rw [concatMap_map, List.length_map] at this
+    exact this
+  have := (hf.bind Writes.pure).prefixed (n := 2) (by rw [ByteArray.append_empty, hsz]; omega)
+  rw [ByteArray.append_empty, hsz] at this
+  unfold sigData
+  rw [concatMap_map]
+  exact this
+
+theorem decode_sig (schemes : List Scheme) (h : schemes.length ≤ 100) :
+    decodeExt (Parser.vec16 u16List) (sigData schemes) = .ok (schemes.map Scheme.code).toArray := by
+  have hm := Reads.many (p := Parser.u16) (out := u16Bytes) (schemes.map Scheme.code) (by
+    intro x hx
+    obtain ⟨s, -, rfl⟩ := List.mem_map.mp hx
+    exact ⟨Reads.uN (code_lt s), by simp [u16Bytes]⟩)
+  have := Reads.vec16 hm (by rw [size_concatMap_u16]; simp; omega)
+  rw [size_concatMap_u16, List.length_map] at this
+  exact Reads.run this
+
 /-- What the client's configuration must satisfy for its messages to be well formed. -/
 structure ClientOK (cfg : Client.Config) : Prop where
   alpnPos : 0 < cfg.alpn.size
@@ -120,10 +161,11 @@ structure ClientOK (cfg : Client.Config) : Prop where
   tps : cfg.transportParams.size ≤ 16384
   name : ∀ n, cfg.serverName = some n → n.toUTF8.size ≤ 255
   suites : cfg.suites.length ≤ 64
+  schemes : cfg.schemes.length ≤ 100
 
 def chTail (cfg : Client.Config) (share : ByteArray) : Array Extension :=
   #[⟨ExtType.supportedVersions, svData⟩, ⟨ExtType.supportedGroups, groupsData cfg.share.group⟩,
-    ⟨ExtType.signatureAlgorithms, sigData⟩, ⟨ExtType.keyShare, ksData cfg.share.group share⟩,
+    ⟨ExtType.signatureAlgorithms, sigData cfg.schemes⟩, ⟨ExtType.keyShare, ksData cfg.share.group share⟩,
     ⟨ExtType.alpn, alpnData cfg.alpn⟩, ⟨ExtType.quicTransportParameters, cfg.transportParams⟩]
 
 def chExts (cfg : Client.Config) (share : ByteArray) : Array Extension :=
@@ -147,7 +189,7 @@ theorem clientHello_eq (cfg : Client.Config) (h : ClientOK cfg) (random share : 
         extensions := chExts cfg share }) := by
   have hg : cfg.share.group < 65536 := (group_sizes cfg.group).2.2
   unfold Client.clientHello
-  rw [ext_eq writes_sv, ext_eq (writes_u16list hg), ext_eq (writes_u16list (g := schemeEd25519) (by decide)),
+  rw [ext_eq writes_sv, ext_eq (writes_u16list hg), ext_eq (writes_sig cfg.schemes h.schemes),
     ext_eq (writes_ks (share := share) hg (by omega)), ext_eq (writes_alpn h.alpnSize)]
   rcases hn : cfg.serverName with _ | name
   · simp [chExts, chTail, hn, groupsData, sigData, bind, Except.bind]
@@ -162,8 +204,15 @@ theorem suite_id_lt (s : Suite) : s.id < 65536 := by cases s <;> decide
 theorem suite_id_inj {s t : Suite} (h : s.id = t.id) : s = t := by
   cases s <;> cases t <;> first | rfl | exact absurd h (by decide)
 
+theorem sig_size (cfg : Client.Config) (h : ClientOK cfg) :
+    (Writes.concatMap (List.map Scheme.code cfg.schemes) u16Bytes).size ≤ 200 := by
+  rw [size_concatMap_u16, List.length_map]
+  have := h.schemes
+  omega
+
 theorem chExts_size (cfg : Client.Config) (h : ClientOK cfg) (share : ByteArray)
     (hs : share.size ≤ 2048) : extsSize (chExts cfg share) ≤ 20000 := by
+  have hsg := sig_size cfg h
   have tp := h.tps
   have al := h.alpnSize
   have h1 : (⟨#[0]⟩ : ByteArray).size = 1 := rfl
@@ -180,6 +229,7 @@ theorem chExts_wf (cfg : Client.Config) (h : ClientOK cfg) (share : ByteArray)
   have tp := h.tps
   have al := h.alpnSize
   have hsize := chExts_size cfg h share hs
+  have hsg := sig_size cfg h
   have h1 : (⟨#[0]⟩ : ByteArray).size = 1 := rfl
   refine ⟨?_, ?_, by omega⟩ <;> unfold chExts chTail <;> rcases hn : cfg.serverName with _ | name
   · simp only [List.mem_cons, List.not_mem_nil, or_false]
@@ -309,7 +359,7 @@ theorem decode_alpn {a : ByteArray} (h0 : 0 < a.size) (ha : a.size < 256) :
 
 theorem find_chExts (cfg : Client.Config) (share : ByteArray) :
     find (chExts cfg share) ExtType.supportedVersions = some svData ∧
-    find (chExts cfg share) ExtType.signatureAlgorithms = some sigData ∧
+    find (chExts cfg share) ExtType.signatureAlgorithms = some (sigData cfg.schemes) ∧
     find (chExts cfg share) ExtType.alpn = some (alpnData cfg.alpn) ∧
     find (chExts cfg share) ExtType.quicTransportParameters = some cfg.transportParams ∧
     find (chExts cfg share) ExtType.keyShare = some (ksData cfg.share.group share) := by
@@ -369,13 +419,15 @@ theorem server_onClientHello (cfg : Server.Config) (h : ServerOK cfg) (seed : Ve
     {suite : Suite} (hsuite : cfg.suites.find? (ids.contains ·.id) = some suite)
     {myShare : Vector UInt8 cfg.share.serverShareSize} {k : Vector UInt8 cfg.share.secretSize}
     (hacc : cfg.share.serverRespond (drawVec seed "key share" cfg.share.entropySize) (toVecN _ share) =
-      some (myShare, k)) :
-    ∃ f : Flight,
+      some (myShare, k))
+    (hsch : cfg.scheme ∈ cfgC.schemes) (hlen : cfgC.schemes.length ≤ 100)
+    (hsign : ∀ input, ∃ sig, cfg.scheme.sign cfg.signingKey seed input = .ok sig) :
+    ∃ f : Flight, ∃ sig : ByteArray,
       let ch := frameBytes HandshakeType.clientHello chB
       let hs := KeySchedule.handshakeSecret (ofVector k)
       let hts := KeySchedule.handshakeTraffic hs (ch ++ f.shF)
       let t := ch ++ f.shF ++ f.eeF ++ f.certF
-      let sig := (ed25519.sign cfg.signingKey (certVerifyInput true t) ()).1
+      cfg.scheme.sign cfg.signingKey seed (certVerifyInput true t) = .ok sig ∧
       let fin := KeySchedule.finishedData hts.server (t ++ f.cvF)
       let tFin := t ++ f.cvF ++ frameBytes HandshakeType.finished fin
       let ap := KeySchedule.applicationTraffic (KeySchedule.masterSecret hs) tFin
@@ -389,7 +441,7 @@ theorem server_onClientHello (cfg : Server.Config) (h : ServerOK cfg) (seed : Ve
         shExts cfg.share.group (ofVector myShare)⟩ ∧
       Parser.run extensions f.ee = .ok (eeExts cfg.alpn cfg.transportParams) ∧
       Parser.run certificate f.cert = .ok (certMsg cfg.certificate) ∧
-      Parser.run certificateVerify f.cv = .ok ⟨schemeEd25519, ofVector sig⟩ ∧
+      Parser.run certificateVerify f.cv = .ok ⟨cfg.scheme.code, sig⟩ ∧
       f.sh.size ≤ maxMessageSize ∧ f.ee.size ≤ maxMessageSize ∧ f.cert.size ≤ maxMessageSize ∧
       f.cv.size ≤ maxMessageSize := by
   obtain ⟨hcs, hss, hgl⟩ := group_sizes cfg.group
@@ -431,16 +483,16 @@ theorem server_onClientHello (cfg : Server.Config) (h : ServerOK cfg) (seed : Ve
   let ch := frameBytes HandshakeType.clientHello chB
   let t := ch ++ frameBytes HandshakeType.serverHello shB ++ frameBytes HandshakeType.encryptedExtensions eeB ++
     frameBytes HandshakeType.certificate certB
-  let sig := (ed25519.sign cfg.signingKey (certVerifyInput true t) ()).1
-  obtain ⟨cvB, hcvs, hcvw, hcvr⟩ := rt_certificateVerify (m := ⟨schemeEd25519, ofVector sig⟩)
-    (by simp [schemeEd25519]) (by rw [Cryptlib.Util.Bytes.size_ofVector (n := 64) sig]; decide)
-  have hcv64 : (ofVector sig).size = 64 := Cryptlib.Util.Bytes.size_ofVector (n := 64) sig
-  refine ⟨⟨shB, eeB, certB, cvB⟩, ?_, Reads.run hshr, Reads.run heer, Reads.run hcertr, Reads.run hcvr,
+  obtain ⟨sig, hsg⟩ := hsign (certVerifyInput true t)
+  have hsz := Scheme.sign_size _ _ _ _ _ hsg
+  obtain ⟨cvB, hcvs, hcvw, hcvr⟩ := rt_certificateVerify (m := ⟨cfg.scheme.code, sig⟩)
+    (code_lt _) (show sig.size < 65536 by omega)
+  refine ⟨⟨shB, eeB, certB, cvB⟩, sig, hsg, ?_, Reads.run hshr, Reads.run heer, Reads.run hcertr,
+    Reads.run hcvr,
     show shB.size ≤ maxMessageSize by unfold maxMessageSize; omega,
     show eeB.size ≤ maxMessageSize by unfold maxMessageSize; omega,
     show certB.size ≤ maxMessageSize by unfold maxMessageSize; have := h.cert; omega,
-    show cvB.size ≤ maxMessageSize by
-      unfold maxMessageSize; dsimp only at hcvs; rw [hcv64] at hcvs; omega⟩
+    show cvB.size ≤ maxMessageSize by unfold maxMessageSize; dsimp only at hcvs; omega⟩
   -- The handler
   have hext1 : ext ExtType.supportedVersions (Writer.u16 Messages.tls13) =
       .ok ⟨ExtType.supportedVersions, u16Bytes Messages.tls13⟩ := ext_eq (Writes.uN (by decide))
@@ -450,11 +502,12 @@ theorem server_onClientHello (cfg : Server.Config) (h : ServerOK cfg) (seed : Ve
       (show (ofVector myShare).size < 256 ^ 2 by rw [show (256 : Nat) ^ 2 = 65536 by rfl]; omega)))
   have hext3 : ext ExtType.alpn (writeAlpnList #[cfg.alpn]) = .ok ⟨ExtType.alpn, alpnData cfg.alpn⟩ :=
     ext_eq (writes_alpn hal)
-  have hsigd : decodeExt (Parser.vec16 u16List) sigData = .ok #[schemeEd25519] :=
-    decode_u16list (g := schemeEd25519) (by decide)
+  have hsigd := decode_sig cfgC.schemes hlen
+  have hcontains : (cfgC.schemes.map Scheme.code).toArray.contains cfg.scheme.code = true := by
+    simpa using List.mem_map_of_mem hsch
   simp only [mSH, shExts] at hshw
   simp only [eeExts] at heew
-  simp only [sig, t, ch] at hcvw
+  simp only [t, ch] at hcvw hsg
   have hfin : ∀ b : ByteArray, b.size = 32 →
       frame HandshakeType.finished (Writer.bytes b) = .ok (frameBytes HandshakeType.finished b) :=
     fun b hb => frame_eq (Writes.bytes b) (by rw [hb]; decide)
@@ -462,14 +515,14 @@ theorem server_onClientHello (cfg : Server.Config) (h : ServerOK cfg) (seed : Ve
     simp [KeySchedule.finishedData]
   unfold Server.onClientHello
   simp only [hch, bind, Except.bind, pure, Except.pure, hsv, hsig, halp, htp, hks, require_some, decode_sv,
-    hsigd, decode_alpn h.alpnPos hal, halpn, hgroup,
+    hsigd, hcontains, hsg, decode_alpn h.alpnPos hal, halpn, hgroup,
     decode_ks hgl' (by rw [hshare]; omega), hsuite, hshare, hacc, hext1, hext2, hext3,
     ByteArray.size_empty, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte, contains_one_bytes,
     contains_one_nat, find?_one, beq_self_eq_true,
     frame_eq hshw (by rw [show (256 : Nat) ^ 3 = 16777216 by rfl]; omega),
     frame_eq heew (by rw [show (256 : Nat) ^ 3 = 16777216 by rfl]; omega),
     frame_eq hcertw (by rw [show (256 : Nat) ^ 3 = 16777216 by rfl]; have := h.cert; omega),
-    frame_eq hcvw (by rw [show (256 : Nat) ^ 3 = 16777216 by rfl]; dsimp only at hcvs; rw [hcv64] at hcvs; omega),
+    frame_eq hcvw (by rw [show (256 : Nat) ^ 3 = 16777216 by rfl]; dsimp only at hcvs; omega),
     hfin _ (hfd _ _)]
   rfl
 
@@ -605,17 +658,20 @@ theorem get0? {α : Type} (a : α) : (#[a])[0]? = some a := rfl
 theorem ctEq_self (b : ByteArray) : ctEq b b = true :=
   (Cryptlib.Util.ConstantTime.ctEq_iff b b).mpr rfl
 
-theorem client_flight (cfg : Client.Config) (ctx : Client.HsCtx) (sk : Vector UInt8 32)
-    (eeB certB cvB tps : ByteArray) {leaf : X509.Leaf} {certData : ByteArray}
+theorem client_flight (cfg : Client.Config) (ctx : Client.HsCtx) (sch : Scheme)
+    (sk seed : Vector UInt8 32) (eeB certB cvB tps sig : ByteArray) {leaf : X509.Leaf}
+    {certData : ByteArray}
     (hee : Parser.run extensions eeB = .ok (eeExts cfg.alpn tps))
     (halpn0 : 0 < cfg.alpn.size) (halpn : cfg.alpn.size < 256)
     (hcert : Parser.run certificate certB = .ok (certMsg certData))
     (hleaf : X509.parseLeaf certData = .ok leaf)
-    (hkey : leaf.ed25519Key = some (ofVector (ed25519.pub sk)))
+    (hkey : leaf.key = some (sch.authKey sk))
+    (hsch : sch ∈ cfg.schemes)
     (hpin : KeySchedule.hash leaf.spki ∈ cfg.pins)
-    (hcv : Parser.run certificateVerify cvB = .ok ⟨schemeEd25519, ofVector (ed25519.sign sk
-      (certVerifyInput true (ctx.transcript ++ frameBytes HandshakeType.encryptedExtensions eeB ++
-        frameBytes HandshakeType.certificate certB)) ()).1⟩) :
+    (hsign : sch.sign sk seed (certVerifyInput true (ctx.transcript ++
+      frameBytes HandshakeType.encryptedExtensions eeB ++ frameBytes HandshakeType.certificate certB)) =
+      .ok sig)
+    (hcv : Parser.run certificateVerify cvB = .ok ⟨sch.code, sig⟩) :
     let t := ctx.transcript ++ frameBytes HandshakeType.encryptedExtensions eeB ++
       frameBytes HandshakeType.certificate certB ++ frameBytes HandshakeType.certificateVerify cvB
     let fin := KeySchedule.finishedData ctx.secrets.server t
@@ -633,18 +689,11 @@ theorem client_flight (cfg : Client.Config) (ctx : Client.HsCtx) (sk : Vector UI
           .install .application ctx.suite { read := ap.server, write := ap.client }]) := by
   intro t fin tFin ap
   obtain ⟨hfa, hft⟩ := find_eeExts cfg.alpn tps
-  have hpub : toVecN 32 (ofVector (ed25519.pub sk)) = ed25519.pub sk :=
-    Cryptlib.Util.Bytes.toVecN_ofVector _
-  have hsig : toVecN 64 (ofVector (ed25519.sign sk (certVerifyInput true (ctx.transcript ++
-      frameBytes HandshakeType.encryptedExtensions eeB ++ frameBytes HandshakeType.certificate certB)) ()).1) =
-      (ed25519.sign sk (certVerifyInput true (ctx.transcript ++
-      frameBytes HandshakeType.encryptedExtensions eeB ++ frameBytes HandshakeType.certificate certB)) ()).1 :=
-    Cryptlib.Util.Bytes.toVecN_ofVector (n := 64) _
-  have hsz : (ofVector (ed25519.sign sk (certVerifyInput true (ctx.transcript ++
-      frameBytes HandshakeType.encryptedExtensions eeB ++ frameBytes HandshakeType.certificate certB))
-      ()).1).size = 64 := Cryptlib.Util.Bytes.size_ofVector (n := 64) _
-  have hvalid := ed25519.verify_sign sk (certVerifyInput true (ctx.transcript ++
-      frameBytes HandshakeType.encryptedExtensions eeB ++ frameBytes HandshakeType.certificate certB)) ()
+  have hvalid := Scheme.verify_sign _ _ _ _ _ hsign
+  have hsc : cfg.schemes.contains (sch.authKey sk).scheme = true := by
+    rw [Scheme.authKey_scheme]; simpa using hsch
+  have hcode : ((sch.code != (sch.authKey sk).scheme.code) = true) = False := by
+    rw [Scheme.authKey_scheme]; simp
   have hfin : ∀ b : ByteArray, b.size = 32 →
       frame HandshakeType.finished (Writer.bytes b) = .ok (frameBytes HandshakeType.finished b) :=
     fun b hb => frame_eq (Writes.bytes b) (by rw [hb]; decide)
@@ -653,9 +702,9 @@ theorem client_flight (cfg : Client.Config) (ctx : Client.HsCtx) (sk : Vector UI
   simp only [handleAll, Client.handle, Client.onEncryptedExtensions, Client.onCertificate,
     Client.onCertificateVerify, Client.onFinished, bind, Except.bind, pure, Except.pure, hee, hfa, hft,
     decode_alpn halpn0 halpn, require_some, beq_self_eq_true, ↓reduceIte, hcert, certMsg, hleaf, hkey,
-    hpin, hcv, hpub, hsig, hvalid, List.size_toArray, List.length_singleton, get0,
+    hpin, hcv, hvalid, List.size_toArray, List.length_singleton, get0, hsc, hcode,
     bne_self_eq_false, Bool.or_false, Bool.false_eq_true, ByteArray.size_empty, get0?, dite_true,
-    hfin _ (hfd _ _), ctEq_self, hsz, fin, t, tFin, ap]
+    Bool.not_true, hfin _ (hfd _ _), ctEq_self, fin, t, tFin, ap]
   exact ⟨_, rfl, rfl⟩
 
 theorem server_onFinished (cfg : Server.Config) (pend : Server.Pending) :
@@ -712,8 +761,13 @@ structure Honest (cfgC : Client.Config) (cfgS : Server.Config) (seedC seedS : Ve
   random : draw seedS "server random" 32 ≠ helloRetryRandom
   /-- The server's certificate holds its signing key, and the client pins it. -/
   certificate : ∃ leaf : X509.Leaf, X509.parseLeaf cfgS.certificate = .ok leaf ∧
-    leaf.ed25519Key = some (ofVector (ed25519.pub cfgS.signingKey)) ∧
+    leaf.key = some (cfgS.scheme.authKey cfgS.signingKey) ∧
     KeySchedule.hash leaf.spki ∈ cfgC.pins
+  /-- The client accepts the server's signature scheme. -/
+  scheme : cfgS.scheme ∈ cfgC.schemes
+  /-- The server's signer does not give up: always so for Ed25519 (`Scheme.sign_ed25519`), with
+  negligible exceptions for ML-DSA. -/
+  signs : ∀ input, ∃ sig, cfgS.scheme.sign cfgS.signingKey seedS input = .ok sig
 
 theorem handshake_correct (cfgC : Client.Config) (cfgS : Server.Config) (seedC seedS : Vector UInt8 32)
     (h : Honest cfgC cfgS seedC seedS) :
@@ -722,9 +776,10 @@ theorem handshake_correct (cfgC : Client.Config) (cfgS : Server.Config) (seedC s
       s.established?.map (·.peerTransportParams) = some cfgC.transportParams ∧
       (installsOf oc).map (·.1) = [.handshake, .application] ∧
       installsOf oc = (installsOf os).map fun (l, su, k) => (l, su, { read := k.write, write := k.read }) := by
-  obtain ⟨hC, hS, hg, ha, ⟨s0, hs0S, hs0C⟩, hrel, hacc, hrand, ⟨leaf, hleaf, hkey, hpin⟩⟩ := h
-  rcases cfgC with ⟨gC, suitesC, alpnC, tpC, pinsC, nameC⟩
-  simp only at hg ha hs0C hpin ⊢
+  obtain ⟨hC, hS, hg, ha, ⟨s0, hs0S, hs0C⟩, hrel, hacc, hrand, ⟨leaf, hleaf, hkey, hpin⟩, hsch,
+    hsign⟩ := h
+  rcases cfgC with ⟨gC, suitesC, alpnC, tpC, pinsC, schemesC, nameC⟩
+  simp only at hg ha hs0C hpin hsch ⊢
   subst hg ha
   -- The ClientHello
   obtain ⟨chB, hstart, hchsz, hchparse⟩ := start_eq _ hC seedC
@@ -746,12 +801,12 @@ theorem handshake_correct (cfgC : Client.Config) (cfgS : Server.Config) (seedC s
       (toVecN _ (ofVector (cfgS.share.clientGen (drawVec seedC "key share" cfgS.share.entropySize)).2)) =
       some (myShare, k) := by
     rw [Cryptlib.Util.Bytes.toVecN_ofVector]; exact hresp
-  obtain ⟨f, hon, hshp, heep, hcertp, hcvp, hshs, hees, hcerts, hcvs⟩ :=
+  obtain ⟨f, sig, hsg, hon, hshp, heep, hcertp, hcvp, hshs, hees, hcerts, hcvs⟩ :=
     server_onClientHello cfgS hS seedS chB (draw seedC "client random" 32) ids _ _ hchparse rfl rfl
-      (by simp) hfind hacc'
+      (by simp) hfind hacc' hsch hC.schemes hsign
   have hs1 := server_recv_clientHello cfgS seedS chB hchsz hon
   -- The client takes the ServerHello
-  let cfgC : Client.Config := ⟨cfgS.group, suitesC, cfgS.alpn, tpC, pinsC, nameC⟩
+  let cfgC : Client.Config := ⟨cfgS.group, suitesC, cfgS.alpn, tpC, pinsC, schemesC, nameC⟩
   have hsh := client_onServerHello cfgC (cfgS.share.clientGen (drawVec seedC "key share" cfgS.share.entropySize)).1
     (frameBytes HandshakeType.clientHello chB) f.sh hsuiteC hrand myShare hk hshp
   have hc1 := client_recv_one (cfg := cfgC)
@@ -765,7 +820,8 @@ theorem handshake_correct (cfgC : Client.Config) (cfgS : Server.Config) (seedC s
       KeySchedule.handshakeTraffic (KeySchedule.handshakeSecret (ofVector k))
         (frameBytes HandshakeType.clientHello chB ++ frameBytes HandshakeType.serverHello f.sh),
       frameBytes HandshakeType.clientHello chB ++ frameBytes HandshakeType.serverHello f.sh⟩
-    cfgS.signingKey f.ee f.cert f.cv cfgS.transportParams heep hS.alpnPos hS.alpnSize hcertp hleaf hkey hpin hcvp
+    cfgS.scheme cfgS.signingKey seedS f.ee f.cert f.cv cfgS.transportParams sig heep hS.alpnPos
+    hS.alpnSize hcertp hleaf hkey hsch hpin hsg hcvp
   have hc2 := client_recv_eq (cfg := cfgC)
     ⟨.waitEncryptedExtensions ⟨suite, KeySchedule.handshakeSecret (ofVector k),
       KeySchedule.handshakeTraffic (KeySchedule.handshakeSecret (ofVector k))
