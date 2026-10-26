@@ -31,6 +31,8 @@ carries the laws of its parts.
   server derived from its share. `KeyShare.ofNIKE` takes `agree` from a NIKE's commutativity,
   `KeyShare.ofKEM` from a KEM's round trip, and `KeyShare.concat` assembles it from two groups'.
   `x25519mlkem768` is `concat mlkem768 x25519` and needs no proof of its own.
+* `Agreement.keys_agree`: when the key exchange is `Reliable` and the server accepts the client's
+  share, the client derives exactly the server's handshake and application traffic secrets.
 * `CipherSuite` carries a Cryptlib `AEAD` and with it that AEAD's laws.
 * `Client.Established` is the client's evidence that the server is authenticated: its constructor
   is private to the client handshake, and it holds a proof that the server's SPKI hash is one of
