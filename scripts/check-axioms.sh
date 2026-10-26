@@ -11,7 +11,7 @@ trap 'rm -f "$tmp"' EXIT
   for n in KeySchedule.expandLabel_size KeyShare.nikeFinish_derived KeyShare.nikeAgree \
            KeyShare.kemAgree KeyShare.left_append KeyShare.right_append KeyShare.concat \
            KeyShare.ofNIKE KeyShare.ofKEM mlkem768 x25519 x25519mlkem768 \
-           Handshake.Client.recv Handshake.Server.recv; do
+           Agreement.keys_agree Handshake.Client.recv Handshake.Server.recv; do
     echo "#print axioms LeanTLS.$n"
   done
 } >"$tmp"
