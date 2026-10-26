@@ -16,9 +16,12 @@ from [Cryptlib](https://github.com/katzenpost/cryptlib).
 * Key exchange: `X25519MLKEM768` (0x11ec, draft-ietf-tls-ecdhe-mlkem), the hybrid of ML-KEM-768
   and X25519. `x25519` and `MLKEM768` are also defined.
 * Cipher suites: `TLS_CHACHA20_POLY1305_SHA256`, preferred, and `TLS_AES_128_GCM_SHA256`.
-* Authentication: the server signs with Ed25519; the client pins `SHA-256(SubjectPublicKeyInfo)`
-  of its certificate, as katzenpost's QUIC transport does. Certificates are self-signed in the
-  shape of katzenpost's `epochCertificate`. No chain validation, no client certificates.
+* Authentication: the server signs with Ed25519 (0x0807) or, for post-quantum authentication,
+  ML-DSA-65 (0x0905, draft-ietf-tls-mldsa; `Server.Config.scheme`). The client lists the schemes
+  it accepts (`Client.Config.schemes`, both by default) and pins `SHA-256(SubjectPublicKeyInfo)` of
+  the certificate, as katzenpost's QUIC transport does. Certificates are self-signed in the shape
+  of katzenpost's `epochCertificate` (`X509.certificateFor`). No chain validation, no client
+  certificates.
 * 1-RTT only: no PSK, no resumption, no 0-RTT, no HelloRetryRequest. Session tickets from the
   server are ignored.
 

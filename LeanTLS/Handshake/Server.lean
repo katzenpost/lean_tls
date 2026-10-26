@@ -15,9 +15,9 @@ open Cryptlib.Util.Bytes (toVecN ofVector)
 
 /-! # The server handshake
 
-Answers a ClientHello offering its key share group, a cipher suite it supports, Ed25519
-signatures and its ALPN protocol, with its whole first flight; then waits for the client's
-Finished. The server authenticates with one Ed25519 certificate and asks for none.
+Answers a ClientHello offering its key share group, a cipher suite it supports, its signature
+scheme and its ALPN protocol, with its whole first flight; then waits for the client's Finished.
+The server authenticates with one certificate, Ed25519 or ML-DSA-65, and asks for none.
 
 `Established` has a private constructor: this module builds one only once the client's Finished
 has checked. -/
@@ -27,7 +27,9 @@ structure Config : Type where
   suites : List Suite := cipherSuites
   alpn   : ByteArray
   transportParams : ByteArray
-  /-- The Ed25519 private key seed (RFC 8032). -/
+  /-- How the server authenticates. -/
+  scheme : Scheme := .ed25519
+  /-- The private key seed: Ed25519's (RFC 8032) or ML-DSA-65's ξ (FIPS 204). -/
   signingKey : Vector UInt8 32
   /-- DER, holding `signingKey`'s public key. -/
   certificate : ByteArray
@@ -77,7 +79,7 @@ def onClientHello (cfg : Config) (seed : Vector UInt8 32) (m : RawMessage) :
   let suite ← require (cfg.suites.find? (ch.cipherSuites.contains ·.id)) .handshakeFailure
   let sigs ← decodeExt (Parser.vec16 u16List)
     (← require (find ch.extensions ExtType.signatureAlgorithms) .missingExtension)
-  unless sigs.contains schemeEd25519 do throw .handshakeFailure
+  unless sigs.contains cfg.scheme.code do throw .handshakeFailure
   let protos ← decodeExt alpnList (← require (find ch.extensions ExtType.alpn) .noApplicationProtocol)
   unless protos.contains cfg.alpn do throw .noApplicationProtocol
   let tps ← require (find ch.extensions ExtType.quicTransportParameters) .missingExtension
@@ -102,9 +104,9 @@ def onClientHello (cfg : Config) (seed : Vector UInt8 32) (m : RawMessage) :
   let cert ← frame HandshakeType.certificate
     (writeCertificate ⟨ByteArray.empty, #[⟨cfg.certificate, ByteArray.empty⟩]⟩)
   let transcript := transcript ++ ee ++ cert
-  let sig := (ed25519.sign cfg.signingKey (certVerifyInput true transcript) ()).1
+  let sig ← cfg.scheme.sign cfg.signingKey seed (certVerifyInput true transcript)
   let cv ← frame HandshakeType.certificateVerify
-    (writeCertificateVerify { scheme := schemeEd25519, signature := ofVector sig })
+    (writeCertificateVerify { scheme := cfg.scheme.code, signature := sig })
   let transcript := transcript ++ cv
   let fin ← frame HandshakeType.finished (Writer.bytes (finishedData hts.server transcript))
   let transcript := transcript ++ fin
