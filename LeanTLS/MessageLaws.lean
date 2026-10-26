@@ -46,11 +46,6 @@ theorem bindAll {w v : Writer Unit} {p : Parser α} {q : α → Parser β} {x : 
   let ⟨o', hs', hw', hr'⟩ := h'
   ⟨o ++ o', by simp; omega, hw.bind hw', hr.bindAll hr'⟩
 
-/-- A field the parser checks and the writer gets right. -/
-theorem check {w : Writer Unit} {p : Parser α} {x : α} {n : Nat} (c : Prop) [Decidable c]
-    (e : Parser α) (hc : ¬c) (h : RT w p x n) : RT w (if c then e else p) x n := by
-  rwa [if_neg hc]
-
 theorem uN {k v : Nat} (hv : v < 256 ^ k) : RT (Writer.uN k v) (Parser.uN k) v k :=
   ⟨beBytes k v, by simp, Writes.uN hv, Reads.uN hv⟩
 

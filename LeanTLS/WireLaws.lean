@@ -100,7 +100,7 @@ theorem decodeBE_beBytes : ∀ n v : Nat, decodeBE (beBytes n v) = v % 256 ^ n
         congr 1
         rw [← Nat.shiftRight_add]
         congr 1
-        simp only [Fin.coe_castSucc]
+        simp only [Fin.val_castSucc]
         have := i.isLt
         omega
       · simp
@@ -140,7 +140,7 @@ theorem bind {w v : Writer Unit} {o o' : ByteArray} (h : Writes w o) (h' : Write
   simp only
   rw [h' (s ++ o), ByteArray.append_assoc]
 
-theorem bytes (b : ByteArray) : Writes (Writer.bytes b) b := fun s => rfl
+theorem bytes (b : ByteArray) : Writes (Writer.bytes b) b := fun _ => rfl
 
 theorem u8 (v : UInt8) : Writes (Writer.u8 v) ⟨#[v]⟩ := fun s => by
   rw [Writer.u8_eq]
