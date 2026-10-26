@@ -1,6 +1,8 @@
 import LeanTLS.Alert
 import LeanTLS.Wire
 import LeanTLS.Messages
+import LeanTLS.WireLaws
+import LeanTLS.MessageLaws
 import LeanTLS.KeySchedule
 import LeanTLS.KeyShare
 import LeanTLS.CipherSuite

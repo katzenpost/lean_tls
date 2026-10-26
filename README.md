@@ -32,6 +32,10 @@ carries the laws of its parts.
   `KeyShare.ofKEM` from a KEM's round trip, and `KeyShare.concat` assembles it from two groups'.
   `x25519mlkem768` is `concat mlkem768 x25519` and needs no proof of its own.
 * `CipherSuite` carries a Cryptlib `AEAD` and with it that AEAD's laws.
+* `WireLaws`, `MessageLaws`: parsers read back what writers write. `RT w p x n` says the writer
+  `w` writes at most `n` bytes from which `p` reads `x`; it composes like the do-blocks it
+  describes, and holds for extensions, ClientHello, ServerHello, Certificate, CertificateVerify,
+  key shares and ALPN lists. `splitMessages_frames` splits framed messages back apart.
 * `Client.Established` is the client's evidence that the server is authenticated: its constructor
   is private to the client handshake, and it holds a proof that the server's SPKI hash is one of
   the pins and that the CertificateVerify signature verified. `Server.Established` likewise holds
@@ -39,7 +43,7 @@ carries the laws of its parts.
 * Handshake phases carry only what has been established so far, so a message out of order has no
   transition.
 
-`make axioms` lists the axioms each law depends on. Beyond Lean's own, those built on X25519 use
+`make axioms` lists the axioms every theorem depends on. Beyond Lean's own, those built on X25519 use
 Cryptlib's `p_prime` and `liftX_isSome_of_exists`.
 
 ## Tests

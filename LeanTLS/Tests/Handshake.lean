@@ -175,6 +175,14 @@ def main : IO UInt32 := do
     let (_, o2) ← toClient c0 (sends o1)
     pure ((installs o2).all (·.2.1 == .aes128gcm))
   ok r "client offering only AES-128-GCM gets it" (r4 == .ok true)
+  let exts (typs : List Nat) := Wire.Writer.run (Messages.writeExtensions
+    (typs.map fun t => (⟨t, ⟨#[UInt8.ofNat t]⟩⟩ : Messages.Extension)).toArray)
+  ok r "distinct extensions parse back" (match exts [1, 2, 3] with
+    | .ok b => (Wire.Parser.run Messages.extensions b).toOption.map (·.map (·.typ)) == some #[1, 2, 3]
+    | .error _ => false)
+  ok r "duplicate extension: illegal_parameter" (match exts [1, 2, 1] with
+    | .ok b => alertOf (Wire.Parser.run Messages.extensions b) == some .illegalParameter
+    | .error _ => false)
 
   let n ← r.get
   IO.println (if n == 0 then "all handshake checks passed" else s!"{n} handshake checks failed")
