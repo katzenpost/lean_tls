@@ -1,0 +1,27 @@
+name: Lean Action CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leanprover/lean-action@v1
+        with:
+          build-args: "LeanTLS LeanTLS.Tests.RFC8448 LeanTLS.Tests.Handshake"
+      - name: Run tests
+        env:
+          # panics in compiled Lean print a message but exit 0 unless this is set
+          LEAN_ABORT_ON_PANIC: "1"
+        run: |
+          ./.lake/build/bin/LeanTLS-Tests-RFC8448
+          ./.lake/build/bin/LeanTLS-Tests-Handshake
+      - name: Check the test vectors match their recorded hashes
+        run: sha256sum -c testdata/rfc8448_1rtt.json.sha256
+      - name: Check the laws use no axioms beyond Lean's own and Cryptlib's X25519
+        run: ./scripts/check-axioms.sh

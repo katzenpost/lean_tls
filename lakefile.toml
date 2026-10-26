@@ -1,0 +1,25 @@
+name = "lean_tls"
+version = "0.1.0"
+description = "High assurance TLS written in Lean"
+keywords = ["tls", "quic", "post-quantum", "cryptography", "protocol"]
+license = "AGPL-3.0-only"
+defaultTargets = ["LeanTLS"]
+
+[leanOptions]
+pp.unicode.fun = true
+autoImplicit = false
+relaxedAutoImplicit = false
+
+[[require]]
+name = "cryptlib"
+git = "https://github.com/katzenpost/cryptlib.git"
+rev = "741bd4cdf61a9f643eea97c82a3bb974be369295"
+
+[[lean_lib]]
+name = "LeanTLS"
+
+[[lean_exe]]
+name = "LeanTLS.Tests.RFC8448"
+
+[[lean_exe]]
+name = "LeanTLS.Tests.Handshake"
