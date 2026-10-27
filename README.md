@@ -73,3 +73,15 @@ make test
 
 The handshake is exercised against Go's crypto/tls and quic-go by
 [lean_quic](https://github.com/katzenpost/lean_quic)'s interop tests.
+
+## Benchmarks
+
+```bash
+make bench
+```
+
+[LeanBench](https://github.com/alok/LeanBench) benchmarks, their own Lake project in `bench/`: the
+whole in-process handshake for X25519MLKEM768 and X25519 with an Ed25519 or ML-DSA-65 server; each
+side's step on its own; key shares, CertificateVerify signing and checking, certificate parsing, the
+transcript hash and the key schedule; and QUIC packet keys, header protection and AEAD seal/open of
+a 1200-byte and 16 KiB payload for both cipher suites. Pass LeanBench flags with `BENCH_ARGS`.

@@ -14,6 +14,9 @@ jobs:
       - uses: leanprover/lean-action@v1
         with:
           build-args: "LeanTLS LeanTLS.Tests.RFC8448 LeanTLS.Tests.Handshake"
+      - name: Build the benchmarks (their own Lake project)
+        working-directory: bench
+        run: lake build
       - name: Run tests
         env:
           # panics in compiled Lean print a message but exit 0 unless this is set

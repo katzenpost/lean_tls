@@ -1,0 +1,28 @@
+name = "lean_tls-bench"
+reservoir = false
+version = "0.1.0"
+packagesDir = "../.lake/packages"
+defaultTargets = ["lean_tls-bench"]
+
+[leanOptions]
+pp.unicode.fun = true
+autoImplicit = false
+relaxedAutoImplicit = false
+
+[[require]]
+name = "LeanBench"
+git = "https://github.com/alok/LeanBench"
+rev = "250d2a892bf8c91ec3ae5de8517793e18379f97b"
+
+# Declared last so that lean_tls's pins, Mathlib's included, take precedence over LeanBench's.
+[[require]]
+name = "lean_tls"
+path = "../"
+
+[[lean_lib]]
+name = "LeanTLSBench"
+globs = ["LeanTLSBench.+"]
+
+[[lean_exe]]
+name = "lean_tls-bench"
+root = "LeanTLSBench.Main"
