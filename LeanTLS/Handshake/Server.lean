@@ -33,8 +33,29 @@ structure Config : Type where
   signingKey : Vector UInt8 32
   /-- DER, holding `signingKey`'s public key. -/
   certificate : ByteArray
+  /-- ML-DSA's expansion of `signingKey`, made on first use and kept for later handshakes. -/
+  mldsaKey : Thunk (Cryptlib.Primitives.Sign.FIPS204.Expanded MLDSA.mldsa65) :=
+    Thunk.mk fun _ => Cryptlib.Primitives.Sign.FIPS204.expand _ signingKey
+  mldsaKey_seed : mldsaKey.get.seed = signingKey := by rfl
 
 abbrev Config.share (cfg : Config) : KeyShare := cfg.group.keyShare
+
+/-- `cfg.scheme.sign cfg.signingKey`, signing ML-DSA with the kept expansion of the key. -/
+def Config.sign (cfg : Config) (seed : Vector UInt8 32) (input : ByteArray) : Except Alert ByteArray :=
+  match cfg.scheme with
+  | .mldsa65 => (signResult (Cryptlib.Primitives.Sign.FIPS204.signExpanded _ cfg.mldsaKey.get input
+      (mldsaState seed))).map (ofVector (n := mldsa65Sig.sigSize))
+  | sch => sch.sign cfg.signingKey seed input
+
+theorem Config.sign_eq (cfg : Config) (seed : Vector UInt8 32) (input : ByteArray) :
+    cfg.sign seed input = cfg.scheme.sign cfg.signingKey seed input := by
+  unfold Config.sign
+  split
+  · rename_i h
+    rw [h, Cryptlib.Primitives.Sign.FIPS204.signExpanded_eq, cfg.mldsaKey_seed]
+    simp only [Scheme.sign, mldsa65Sig, Cryptlib.Primitives.Sign.FIPS204.mldsa65Signature,
+      Cryptlib.Primitives.Sign.FIPS204.scheme]
+  · rfl
 
 structure Established : Type where
   private mk ::
@@ -104,7 +125,7 @@ def onClientHello (cfg : Config) (seed : Vector UInt8 32) (m : RawMessage) :
   let cert ← frame HandshakeType.certificate
     (writeCertificate ⟨ByteArray.empty, #[⟨cfg.certificate, ByteArray.empty⟩]⟩)
   let transcript := transcript ++ ee ++ cert
-  let sig ← cfg.scheme.sign cfg.signingKey seed (certVerifyInput true transcript)
+  let sig ← cfg.sign seed (certVerifyInput true transcript)
   let cv ← frame HandshakeType.certificateVerify
     (writeCertificateVerify { scheme := cfg.scheme.code, signature := sig })
   let transcript := transcript ++ cv
