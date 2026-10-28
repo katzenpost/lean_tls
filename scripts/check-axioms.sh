@@ -27,7 +27,8 @@ open Lean Elab Command
     let axs ← collectAxioms n
     IO.println s!"{n}: {axs.qsort (·.toString < ·.toString) |>.toList}"
 LEAN
-out=$(lake env lean "$tmp" 2>&1)
+# Lake reports a dependency checkout on an info: line; it is not a law.
+out=$(lake env lean "$tmp" 2>&1 | grep -v '^info: ')
 echo "$out"
 allowed='propext\|Classical.choice\|Quot.sound\|Cryptlib.Primitives.NIKE.X25519.p_prime'
 if grep -v ": \[\(\($allowed\)\(, \($allowed\)\)*\)\?\]$" <<<"$out" | grep -q .; then
