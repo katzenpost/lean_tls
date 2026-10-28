@@ -514,7 +514,7 @@ theorem server_onClientHello (cfg : Server.Config) (h : ServerOK cfg) (seed : Ve
   have hfd : ∀ a b, (KeySchedule.finishedData a b).size = 32 := fun a b => by
     simp [KeySchedule.finishedData]
   unfold Server.onClientHello
-  simp only [hch, bind, Except.bind, pure, Except.pure, hsv, hsig, halp, htp, hks, require_some, decode_sv,
+  simp only [Server.Config.sign_eq, hch, bind, Except.bind, pure, Except.pure, hsv, hsig, halp, htp, hks, require_some, decode_sv,
     hsigd, hcontains, hsg, decode_alpn h.alpnPos hal, halpn, hgroup,
     decode_ks hgl' (by rw [hshare]; omega), hsuite, hshare, hacc, hext1, hext2, hext3,
     ByteArray.size_empty, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte, contains_one_bytes,
