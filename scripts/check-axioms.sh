@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Print the axioms behind every theorem written in LeanTLS, and the definitions carrying laws,
 # and fail on anything beyond Lean's own (propext, Classical.choice, Quot.sound) and, for those
-# built on Cryptlib's X25519, that module's two axioms (p_prime, liftX_isSome_of_exists).
+# built on Cryptlib's X25519, the primality of its field (p_prime).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 tmp=$(mktemp -p "${TMPDIR:-.}" --suffix=.lean)
@@ -29,7 +29,7 @@ open Lean Elab Command
 LEAN
 out=$(lake env lean "$tmp" 2>&1)
 echo "$out"
-allowed='propext\|Classical.choice\|Quot.sound\|Cryptlib.Primitives.NIKE.X25519.p_prime\|Cryptlib.Primitives.NIKE.X25519.liftX_isSome_of_exists'
+allowed='propext\|Classical.choice\|Quot.sound\|Cryptlib.Primitives.NIKE.X25519.p_prime'
 if grep -v ": \[\(\($allowed\)\(, \($allowed\)\)*\)\?\]$" <<<"$out" | grep -q .; then
   echo "FAIL: a theorem depends on an unexpected axiom" >&2
   exit 1
