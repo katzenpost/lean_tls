@@ -4,7 +4,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 -/
 
 import Cryptlib.Primitives.NIKE.NIKE
-import Cryptlib.Primitives.NIKE.X25519
+import Cryptlib.Primitives.NIKE.Schemes
 import Cryptlib.Primitives.KEM.KEM
 import Cryptlib.Primitives.KEM.MLKEM.MLKEM768
 
@@ -231,12 +231,12 @@ end KeyShare
 
 open Cryptlib.Primitives.KEM.FIPS203 (checkEncapsulationKey)
 
-instance : Inhabited Cryptlib.Primitives.NIKE.X25519.Scheme.PrivateKey :=
-  ⟨Cryptlib.Primitives.NIKE.X25519.Scheme.privateKeyFromSeed (Vector.replicate 32 0)⟩
+instance : Inhabited Cryptlib.Primitives.NIKE.X25519FastScheme.PrivateKey :=
+  ⟨Cryptlib.Primitives.NIKE.X25519FastScheme.privateKeyFromSeed (Vector.replicate 32 0)⟩
 
-/-- `x25519` (0x001d), over Cryptlib's group formulation of X25519, whose commutativity is
-proved. -/
-def x25519 : KeyShare := KeyShare.ofNIKE "x25519" 0x001d Cryptlib.Primitives.NIKE.X25519.Scheme
+/-- `x25519` (0x001d), over Cryptlib's RFC 7748 Montgomery ladder, proved to compute the curve
+group's scalar multiplication. -/
+def x25519 : KeyShare := KeyShare.ofNIKE "x25519" 0x001d Cryptlib.Primitives.NIKE.X25519FastScheme
 
 /-- ML-KEM-768 with the FIPS 203 §7.2 encapsulation key check. -/
 def mlkem768 : KeyShare :=
